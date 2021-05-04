@@ -1,16 +1,87 @@
 import os
 import shutil
 import json
+import operator
 
 import pandas as pd
 import numpy as np
-import operator
 
 DATABASE_DIR = 'databases'
 
 class Invalid_Command(Exception):
     '''Exception for when a command is invalid'''
     pass
+
+
+def begin_transaction(database, **kwargs):
+    '''
+    This function will begin new transactions. It looks for a transactions file and if it does not exist, it will be created.
+
+    Returns: database
+    '''
+    # Looks for transactions file
+    transactions_file = os.path.join(DATABASE_DIR,'transactions_log.json')
+    if not os.path.isfile(transactions_file):
+        transaction_dict = {
+            1: list()
+        }
+    else:
+        with open(transactions_file,'r') as f:
+            transaction_dict = json.load(f)
+            transaction_dict = {int(k):v for k,v in transaction_dict.items()}
+        
+        # Adds new key for new transaction and makes the transaction id one higher
+        transaction_dict[max(transaction_dict.keys()) + 1] = list()
+
+    # Exports transactions dictionary to JSON file in the database folder
+    with open(transactions_file,'w') as f:
+        json.dump(transaction_dict,f)
+    
+    print('Transaction began.\n')
+
+    return database
+
+
+def commit_transaction(database, **kwargs):
+    '''
+    This function will commit the most recently started transactions. It looks for a transactions file, reads it in, changes altered files names to overwrite originals and deletes key from dictionary.
+
+    Returns: database
+    '''
+    # Looks for transactions file
+    transactions_file = os.path.join(DATABASE_DIR,'transactions_log.json')
+    if not os.path.isfile(transactions_file):
+        raise Invalid_Command('No active transactions.')
+    else:
+        with open(transactions_file,'r') as f:
+            transaction_dict = json.load(f)
+            transaction_dict = {int(k):v for k,v in transaction_dict.items()}
+
+    if len(transaction_dict) == 0:
+        raise Invalid_Command('No active transactions.\n')
+
+    if len(transaction_dict[max(transaction_dict.keys())]) == 0:
+        transaction_dict.pop(max(transaction_dict.keys()), None)
+
+         # Exports transactions dictionary to JSON file in the database folder
+        with open(transactions_file,'w') as f:
+            json.dump(transaction_dict,f)
+        raise Invalid_Command('Nothing to commit. Transaction aborted.\n')
+
+    else:
+        for file_path in transaction_dict[max(transaction_dict.keys())]:
+
+            os.rename(file_path, file_path.replace('_lock',''))
+    
+    transaction_dict.pop(max(transaction_dict.keys()), None)
+
+    # Exports transactions dictionary to JSON file in the database folder
+    with open(transactions_file,'w') as f:
+        json.dump(transaction_dict,f)
+    
+    print('Transaction committed.\n')
+    
+    return database
 
 
 def format_values(value):
@@ -385,6 +456,10 @@ def alter_table(command, database, **kwargs):
     table_path = os.path.join(DATABASE_DIR,database,f'{table_name}.csv')
     schema_path = os.path.join(DATABASE_DIR,database,f'{table_name}_schema.json')
 
+    # Raises error if file has already locked 
+    if os.path.isfile(table_path.replace('.csv','_lock.csv')):
+        raise Invalid_Command(f'Table {table_name} is locked.\n')
+
     # Checks if table exists
     if os.path.isfile(table_path) & os.path.isfile(schema_path):
 
@@ -427,6 +502,22 @@ def add_to_table(table_path, schema_path, column_name, column_type, **kwargs):
 
     # Adds new column to table and saves table to csv
     table[column_name] = np.nan
+
+
+    transactions_file = os.path.join(DATABASE_DIR,'transactions_log.json')
+    if os.path.isfile(transactions_file):
+        with open(transactions_file,'r') as f:
+            transaction_dict = json.load(f)
+        
+        if len(transaction_dict) > 0:
+            transaction_dict = {int(k):v for k,v in transaction_dict.items()}
+
+            table_path = table_path.replace('.csv','_lock.csv')
+            transaction_dict[max(transaction_dict.keys())].append(table_path)
+            
+            with open(transactions_file,'w') as f:
+                json.dump(transaction_dict,f)
+
     table.to_csv(table_path, index = False)
 
     # Adds new column to schema and saves to json
@@ -454,6 +545,22 @@ def remove_from_table(table_path, schema_path, column_name, **kwargs):
 
     # Drops columm from table and saves to csv
     table = table.drop(columns = column_name)
+
+
+    transactions_file = os.path.join(DATABASE_DIR,'transactions_log.json')
+    if os.path.isfile(transactions_file):
+        with open(transactions_file,'r') as f:
+            transaction_dict = json.load(f)
+        
+        if len(transaction_dict) > 0:
+            transaction_dict = {int(k):v for k,v in transaction_dict.items()}
+
+            table_path = table_path.replace('.csv','_lock.csv')
+            transaction_dict[max(transaction_dict.keys())].append(table_path)
+            
+            with open(transactions_file,'w') as f:
+                json.dump(transaction_dict,f)
+
     table.to_csv(table_path, index = False)
 
     # Drops column from schema and saves to json
@@ -482,6 +589,10 @@ def insert(command, database, raw_command, **kwargs):
     table_name = command[2]
     table_path = os.path.join(DATABASE_DIR,database,f'{table_name}.csv')
 
+    # Raises error if file has already locked 
+    if os.path.isfile(table_path.replace('.csv','_lock.csv')):
+        raise Invalid_Command(f'Table {table_name} is locked.\n')
+
     # Checks if table exists
     if os.path.isfile(table_path):
 
@@ -505,6 +616,20 @@ def insert(command, database, raw_command, **kwargs):
         table_df = pd.read_csv(table_path)
 
         table_df.loc[table_df.index.max()+1] = formatted_values
+
+        transactions_file = os.path.join(DATABASE_DIR,'transactions_log.json')
+        if os.path.isfile(transactions_file):
+            with open(transactions_file,'r') as f:
+                transaction_dict = json.load(f)
+            
+            if len(transaction_dict) > 0:
+                transaction_dict = {int(k):v for k,v in transaction_dict.items()}
+
+                table_path = table_path.replace('.csv','_lock.csv')
+                transaction_dict[max(transaction_dict.keys())].append(table_path)
+                
+                with open(transactions_file,'w') as f:
+                    json.dump(transaction_dict,f)
 
         table_df.to_csv(table_path, index = False)
 
@@ -536,6 +661,10 @@ def delete(command, database, raw_command, **kwargs):
     table_name = command[2]
     table_path = os.path.join(DATABASE_DIR,database,f'{table_name}.csv')
 
+    # Raises error if file has already locked 
+    if os.path.isfile(table_path.replace('.csv','_lock.csv')):
+        raise Invalid_Command(f'Table {table_name} is locked.\n')
+
     # Checks if table exists
     if os.path.isfile(table_path):
 
@@ -561,6 +690,20 @@ def delete(command, database, raw_command, **kwargs):
         else:
             table_df.drop(table_df.index, inplace=True)
             print(f'Deleted all records.\n')
+
+        transactions_file = os.path.join(DATABASE_DIR,'transactions_log.json')
+        if os.path.isfile(transactions_file):
+            with open(transactions_file,'r') as f:
+                transaction_dict = json.load(f)
+            
+            if len(transaction_dict) > 0:
+                transaction_dict = {int(k):v for k,v in transaction_dict.items()}
+
+                table_path = table_path.replace('.csv','_lock.csv')
+                transaction_dict[max(transaction_dict.keys())].append(table_path)
+                
+                with open(transactions_file,'w') as f:
+                    json.dump(transaction_dict,f)
 
         # Saves new table
         table_df.to_csv(table_path, index = False)
@@ -636,6 +779,10 @@ def update_table(command, database, raw_command, **kwargs):
     table_name = command[1]
     table_path = os.path.join(DATABASE_DIR,database,f'{table_name}.csv')
 
+    # Raises error if file has already locked 
+    if os.path.isfile(table_path.replace('.csv','_lock.csv')):
+        raise Invalid_Command(f'Table {table_name} is locked.\n')
+
     # Checks if table exists
     if os.path.isfile(table_path):
 
@@ -668,6 +815,20 @@ def update_table(command, database, raw_command, **kwargs):
                 
                 # Sets value
                 table_df.loc[filter_series,column] = value
+
+                transactions_file = os.path.join(DATABASE_DIR,'transactions_log.json')
+                if os.path.isfile(transactions_file):
+                    with open(transactions_file,'r') as f:
+                        transaction_dict = json.load(f)
+                    
+                    if len(transaction_dict) > 0:
+                        transaction_dict = {int(k):v for k,v in transaction_dict.items()}
+
+                        table_path = table_path.replace('.csv','_lock.csv')
+                        transaction_dict[max(transaction_dict.keys())].append(table_path)
+                        
+                        with open(transactions_file,'w') as f:
+                            json.dump(transaction_dict,f)
 
                 table_df.to_csv(table_path, index = False)
 
@@ -729,5 +890,7 @@ command_dict = {
     'alter': alter_table,
     'insert': insert,
     'update': update_table,
-    'delete': delete
+    'delete': delete,
+    'begin': begin_transaction,
+    'commit': commit_transaction
 }
