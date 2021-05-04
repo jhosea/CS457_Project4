@@ -1,6 +1,6 @@
-# CS 457 Project 3: Table Joins
+# CS 457 Project 4: Transactions
 
-This program manages the metadata in a database system with the ability to create and delete databases as well as create, delete, query over multiple tables, and alter a table within a given database.
+This program manages the metadata in a database system with the ability to create and delete databases as well as create, delete, query over multiple tables, alter a table within a given database, and enclose SQL statements in a transaction block.
 
 ## Requirements:
 * Python 3
